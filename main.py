@@ -1,40 +1,219 @@
-import nmap
+#!/usr/bin/env python3
+"""
+TZSSHVUN V1 - Ethical Vulnerability Scanner
+Author: Japhet Munisi
+"""
+
 import sys
-import os
-from docx import Document
-from docx.shared import Pt, RGBColor
+import subprocess
+import socket
+import requests
+from bs4 import BeautifulSoup
 from datetime import datetime
+from docx import Document
+from docx.shared import Pt
+import nmap
 
-class TZSSHVUN:
-    """
-    Author: Japhet Munisi
-    Email: munisi.japhet@gmail.com
-    WhatsApp: +255784121281
-    Tool: TZSSHVUN V1
-    """
-    def __init__(self, target):
-        self.target = target
-        self.tool_name = "TZSSHVUN V1"
-        self.author = "Japhet Munisi"
-        self.results = {}
+# -------------------------
+# CONFIG (Author Info)
+# -------------------------
+AUTHOR = "Japhet Munisi"
+EMAIL = "munisi.japhet@gmail.com"
+WHATSAPP = "+255784121281"
+TOOL_NAME = "TZSSHVUN V1"
 
-    def banner(self):
-        print(f"""
-        ==================================================
-        [+] Tool   : {self.tool_name}
-        [+] Author : {self.author}
-        [+] Status : Ethical Hacking Vulnerability Scanner
-        ==================================================
-        Scanning Target: {self.target}
-        """)
+# -------------------------
+# Dependency Check
+# -------------------------
+def check_dependencies():
+    try:
+        import nmap
+        import requests
+        import bs4
+        import docx
+    except ImportError as e:
+        print(f"[ERROR] Missing dependency: {e}")
+        print("Run: pip install -r requirements.txt")
+        sys.exit(1)
 
-    def check_nmap(self):
-        try:
-            nmap.PortScanner()
-        except Exception:
-            print("[-] Error: Nmap is not installed or not in PATH.")
-            print("[!] Install Nmap: https://nmap.org/download.html")
-            sys.exit(1)
+# -------------------------
+# Network Scanner
+# -------------------------
+def network_scan(target):
+    results = []
+    try:
+        scanner = nmap.PortScanner()
+        print(f"[+] Scanning {target}...")
+
+        scanner.scan(hosts=target, arguments='-sV -O --script vuln')
+
+        for host in scanner.all_hosts():
+            host_data = {
+                "host": host,
+                "state": scanner[host].state(),
+                "protocols": []
+            }
+
+            for proto in scanner[host].all_protocols():
+                ports = scanner[host][proto].keys()
+                for port in ports:
+                    service = scanner[host][proto][port]
+                    entry = {
+                        "port": port,
+                        "state": service['state'],
+                        "name": service.get('name'),
+                        "product": service.get('product'),
+                        "version": service.get('version'),
+                        "scripts": service.get('script', {})
+                    }
+                    host_data["protocols"].append(entry)
+
+            results.append(host_data)
+
+    except Exception as e:
+        print(f"[ERROR] Network scan failed: {e}")
+
+    return results
+
+# -------------------------
+# Web Vulnerability Scanner
+# -------------------------
+def web_scan(url):
+    findings = []
+
+    try:
+        response = requests.get(url, timeout=10)
+        headers = response.headers
+
+        # Security Headers Check
+        required_headers = [
+            "Content-Security-Policy",
+            "X-Frame-Options",
+            "Strict-Transport-Security",
+            "X-Content-Type-Options"
+        ]
+
+        for header in required_headers:
+            if header not in headers:
+                findings.append({
+                    "type": "Missing Security Header",
+                    "detail": header
+                })
+
+        # Directory Listing Check
+        if "Index of /" in response.text:
+            findings.append({
+                "type": "Open Directory",
+                "detail": "Directory listing enabled"
+            })
+
+        # Parse Forms for potential XSS/SQLi
+        soup = BeautifulSoup(response.text, "html.parser")
+        forms = soup.find_all("form")
+
+        for form in forms:
+            inputs = form.find_all("input")
+            for inp in inputs:
+                name = inp.get("name")
+                if name:
+                    findings.append({
+                        "type": "Potential Input Field",
+                        "detail": f"Input '{name}' may be vulnerable to XSS/SQLi"
+                    })
+
+    except Exception as e:
+        print(f"[ERROR] Web scan failed: {e}")
+
+    return findings
+
+# -------------------------
+# Report Generator
+# -------------------------
+def generate_report(target, net_results, web_results):
+    doc = Document()
+
+    # Cover Page
+    doc.add_heading(TOOL_NAME, 0)
+    doc.add_paragraph("Professional Vulnerability Assessment Report")
+    doc.add_paragraph(f"Target: {target}")
+    doc.add_paragraph(f"Date: {datetime.now()}")
+    doc.add_page_break()
+
+    # Executive Summary
+    doc.add_heading("Executive Summary", 1)
+    doc.add_paragraph(
+        "This report outlines identified vulnerabilities from automated scanning. "
+        "Immediate remediation is recommended to reduce risk exposure."
+    )
+
+    # Technical Findings
+    doc.add_heading("Technical Findings", 1)
+
+    # Network Findings
+    doc.add_heading("Network Scan Results", 2)
+    for host in net_results:
+        doc.add_paragraph(f"Host: {host['host']} ({host['state']})")
+        for service in host["protocols"]:
+            doc.add_paragraph(
+                f"Port {service['port']} - {service['name']} "
+                f"{service['product']} {service['version']}"
+            )
+            if service["scripts"]:
+                doc.add_paragraph(f"Vulnerabilities: {service['scripts']}")
+
+    # Web Findings
+    doc.add_heading("Web Vulnerabilities", 2)
+    for vuln in web_results:
+        doc.add_paragraph(f"{vuln['type']} - {vuln['detail']}")
+
+    # Recommendations Table
+    doc.add_heading("Remediation & Recommendations", 1)
+    table = doc.add_table(rows=1, cols=2)
+    table.rows[0].cells[0].text = "Vulnerability"
+    table.rows[0].cells[1].text = "Recommendation"
+
+    for vuln in web_results:
+        row = table.add_row().cells
+        row[0].text = vuln['type']
+        row[1].text = "Apply security best practices and patch system."
+
+    # Author Info
+    doc.add_heading("Author Information", 1)
+    doc.add_paragraph(f"Author: {AUTHOR}")
+    doc.add_paragraph(f"Email: {EMAIL}")
+    doc.add_paragraph(f"WhatsApp: {WHATSAPP}")
+
+    filename = f"TZSSHVUN_Report_{target}.docx"
+    doc.save(filename)
+
+    print(f"[+] Report saved: {filename}")
+
+# -------------------------
+# Main
+# -------------------------
+def main():
+    check_dependencies()
+
+    if len(sys.argv) < 2:
+        print("Usage: python main.py <target_ip_or_url>")
+        sys.exit(1)
+
+    target = sys.argv[1]
+
+    print("[*] Starting TZSSHVUN V1...\n")
+
+    net_results = network_scan(target)
+
+    web_results = []
+    if target.startswith("http"):
+        web_results = web_scan(target)
+
+    generate_report(target, net_results, web_results)
+
+    print("[+] Scan completed successfully.")
+
+if __name__ == "__main__":
+    main()            sys.exit(1)
 
     def scan(self):
         print(f"[*] Initializing deep scan on {self.target}...")
